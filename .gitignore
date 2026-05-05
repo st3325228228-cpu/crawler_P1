@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Playwright
+.cache/
+ms-playwright/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 爬取結果
+*.csv
+*.json
+!requirements*.json
+scrape_*.csv
+scrape_*.json
+
+# 日誌
+*.log
+logs/
