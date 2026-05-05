@@ -1,5 +1,5 @@
 """
-通用動態爬蟲 + Streamlit UI（單檔整合版）
+通用動態爬蟲 + Streamlit UI（四模式比較版）
 支援：靜態 / Cloudflare / ASP.NET ViewState / JS 動態（Playwright）
 """
 
@@ -14,7 +14,6 @@ import cloudscraper
 import pandas as pd
 import streamlit as st
 from bs4 import BeautifulSoup
-from lxml import etree
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -111,7 +110,7 @@ class HttpClient:
         self._req_session   = self._make_requests_session()
         self._cloud_session = self._make_cloud_session()
 
-    def _make_requests_session(self) -> requests.Session:
+    def _make_requests_session(self):
         s = requests.Session()
         s.headers.update(_base_headers())
         if self.config.extra_headers:
@@ -139,6 +138,8 @@ class HttpClient:
                     return self._get_playwright(url, logs)
                 else:
                     return html, ""
+            if mode == "requests":
+                return None, err
 
         if mode in ("auto", "cloudscraper"):
             html, err = self._get_cloud(url, logs)
@@ -147,13 +148,15 @@ class HttpClient:
                 if not info["is_blocked"]:
                     return html, ""
                 logs.append("⚠️ cloudscraper 也被擋，切換 playwright")
+            if mode == "cloudscraper":
+                return None, err
 
         if mode in ("auto", "playwright"):
             return self._get_playwright(url, logs)
 
         return None, "所有模式均失敗"
 
-    def _get_requests(self, url: str, logs: list):
+    def _get_requests(self, url, logs):
         err = ""
         for attempt in range(self.config.retries):
             try:
@@ -173,7 +176,7 @@ class HttpClient:
         logs.append(f"❌ requests 失敗：{err}")
         return None, err
 
-    def _get_cloud(self, url: str, logs: list):
+    def _get_cloud(self, url, logs):
         try:
             r = self._cloud_session.get(url, timeout=self.config.timeout + 5)
             r.encoding = r.apparent_encoding
@@ -183,7 +186,7 @@ class HttpClient:
             logs.append(f"❌ cloudscraper 失敗：{e}")
             return None, str(e)
 
-    def _get_playwright(self, url: str, logs: list):
+    def _get_playwright(self, url, logs):
         try:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
@@ -200,19 +203,15 @@ class HttpClient:
             logs.append(f"❌ playwright 失敗：{e}")
             return None, str(e)
 
-    def post(self, url: str, data: dict, logs: list):
+    def post(self, url, data, logs):
         try:
             self._req_session.headers.update({"User-Agent": _get_ua()})
             try:
-                r = self._req_session.post(
-                    url, data=data,
-                    timeout=self.config.timeout, verify=True
-                )
+                r = self._req_session.post(url, data=data,
+                                           timeout=self.config.timeout, verify=True)
             except requests.exceptions.SSLError:
-                r = self._req_session.post(
-                    url, data=data,
-                    timeout=self.config.timeout, verify=False
-                )
+                r = self._req_session.post(url, data=data,
+                                           timeout=self.config.timeout, verify=False)
             r.raise_for_status()
             r.encoding = r.apparent_encoding
             logs.append(f"✅ POST [{r.status_code}] {url}")
@@ -228,7 +227,7 @@ class HttpClient:
 class AspNetHandler:
 
     @staticmethod
-    def extract_viewstate(html: str) -> dict:
+    def extract_viewstate(html):
         soup = BeautifulSoup(html, "html.parser")
         fields = [
             "__VIEWSTATE", "__EVENTVALIDATION",
@@ -243,12 +242,10 @@ class AspNetHandler:
         return payload
 
     @staticmethod
-    def find_query_input(html: str) -> str:
+    def find_query_input(html):
         soup = BeautifulSoup(html, "html.parser")
-        candidates = [
-            "txtKW", "keyword", "q", "search",
-            "txtKeyword", "kw", "query", "txtSearch",
-        ]
+        candidates = ["txtKW", "keyword", "q", "search",
+                      "txtKeyword", "kw", "query", "txtSearch"]
         for name in candidates:
             if soup.find("input", {"name": name}):
                 return name
@@ -256,7 +253,7 @@ class AspNetHandler:
         return tag["name"] if tag and tag.get("name") else "keyword"
 
     @staticmethod
-    def find_submit_button(html: str) -> dict:
+    def find_submit_button(html):
         soup = BeautifulSoup(html, "html.parser")
         for btn in soup.find_all("input", {"type": ["submit", "button"]}):
             name = btn.get("name", "")
@@ -266,7 +263,7 @@ class AspNetHandler:
         return {}
 
     @staticmethod
-    def paginate_payload(payload: dict, page: int) -> dict:
+    def paginate_payload(payload, page):
         p = payload.copy()
         p["__EVENTTARGET"]   = "GridView1"
         p["__EVENTARGUMENT"] = f"Page${page}"
@@ -279,7 +276,7 @@ class AspNetHandler:
 class Parser:
 
     @staticmethod
-    def parse(html: str, url: str, info: dict) -> list:
+    def parse(html, url, info):
         soup = BeautifulSoup(html, "lxml")
         for tag in soup(["script", "style", "nav",
                          "footer", "header", "noscript", "iframe"]):
@@ -342,16 +339,13 @@ class Parser:
     @staticmethod
     def find_next_url(html, current_url, page_param, next_page):
         soup = BeautifulSoup(html, "html.parser")
-
         tag = soup.find("link", rel="next")
         if tag and tag.get("href"):
             return urljoin(current_url, tag["href"])
-
         for a in soup.find_all("a", href=True):
             text = a.get_text(strip=True).lower()
             if any(kw in text for kw in ["下一頁", "next", "›", "»", "下頁"]):
                 return urljoin(current_url, a["href"])
-
         parsed = urlparse(current_url)
         qs = parse_qs(parsed.query)
         qs[page_param] = [str(next_page)]
@@ -364,14 +358,13 @@ class Parser:
 # ══════════════════════════════════════════
 class UniversalScraper:
 
-    def scrape(self, url: str, pages: int = 1,
-               keyword: str = "", mode: str = "auto") -> dict:
+    def scrape(self, url, pages=1, keyword="", mode="auto"):
         config = ScrapeConfig(mode=mode, max_pages=pages, keyword=keyword)
         client = HttpClient(config)
         logs   = []
         result = {
-            "url": url, "pages_scraped": 0,
-            "total_rows": 0, "data": [], "logs": logs,
+            "url": url, "mode": mode, "pages_scraped": 0,
+            "total_rows": 0, "data": [], "logs": logs, "error": "",
         }
 
         html, err = client.get(url, logs)
@@ -384,14 +377,12 @@ class UniversalScraper:
 
         if info["is_aspnet"]:
             logs.append("📋 模式：ASP.NET ViewState")
-            all_data = self._scrape_aspnet(
-                url, html, pages, keyword, config, client, logs
-            )
+            all_data = self._scrape_aspnet(url, html, pages, keyword,
+                                           config, client, logs)
         else:
             logs.append("🌐 模式：通用爬取")
-            all_data = self._scrape_generic(
-                url, html, pages, keyword, info, config, client, logs
-            )
+            all_data = self._scrape_generic(url, html, pages, keyword,
+                                            info, config, client, logs)
 
         if keyword:
             before = len(all_data)
@@ -407,8 +398,8 @@ class UniversalScraper:
         result["pages_scraped"] = pages
         return result
 
-    def _scrape_aspnet(self, url, first_html, pages,
-                       keyword, config, client, logs):
+    def _scrape_aspnet(self, url, first_html, pages, keyword,
+                       config, client, logs):
         all_data = []
         handler  = AspNetHandler()
 
@@ -448,17 +439,16 @@ class UniversalScraper:
 
         return all_data
 
-    def _scrape_generic(self, url, first_html, pages,
-                        keyword, info, config, client, logs):
+    def _scrape_generic(self, url, first_html, pages, keyword,
+                        info, config, client, logs):
         all_data    = []
         current_url = url
         html        = first_html
 
         for page in range(1, pages + 1):
             if page > 1:
-                next_url = Parser.find_next_url(
-                    html, current_url, config.page_param, page
-                )
+                next_url = Parser.find_next_url(html, current_url,
+                                                config.page_param, page)
                 if not next_url or next_url == current_url:
                     logs.append(f"ℹ️ 找不到第 {page} 頁，停止")
                     break
@@ -484,33 +474,9 @@ class UniversalScraper:
 
         return all_data
 
-    def scrape_multiple(self, urls, pages=1, keyword="",
-                        mode="auto", max_workers=5):
-        all_data, all_logs = [], []
-
-        def _task(url):
-            return self.scrape(url, pages, keyword, mode)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {ex.submit(_task, u): u for u in urls}
-            for future in as_completed(futures):
-                url = futures[future]
-                try:
-                    r = future.result()
-                    all_data.extend(r.get("data", []))
-                    all_logs.extend(r.get("logs", []))
-                except Exception as e:
-                    all_logs.append(f"⚠️ {url} 執行緒錯誤：{e}")
-
-        return {
-            "total_rows": len(all_data),
-            "data":       all_data,
-            "logs":       all_logs,
-        }
-
 
 # ══════════════════════════════════════════
-# Playwright 安裝（首次啟動時執行，會被快取）
+# Streamlit 初始化
 # ══════════════════════════════════════════
 @st.cache_resource(show_spinner="正在初始化 Playwright...")
 def install_playwright():
@@ -556,36 +522,33 @@ scraper = get_scraper()
 st.title("🕷️ 通用動態爬蟲")
 st.caption(
     "支援 **靜態網頁 / ASP.NET / Cloudflare / JavaScript 動態** 網站 · "
-    "自動偵測模式，無需手動設定"
+    "可一次跑四種模式做比較"
 )
 
 st.divider()
 
 # ── 輸入區 ────────────────────────────
-col1, col2 = st.columns([4, 1])
-with col1:
-    url_input = st.text_input(
-        "🌐 目標網址",
-        placeholder="https://judgment.judicial.gov.tw/FJUD/default.aspx",
-    )
-with col2:
-    mode_input = st.selectbox(
-        "⚙️ 模式",
-        options=["auto", "requests", "cloudscraper", "playwright"],
-        index=0,
-    )
+url_input = st.text_input(
+    "🌐 目標網址",
+    placeholder="https://judgment.judicial.gov.tw/FJUD/default.aspx",
+)
+
+st.markdown("**⚙️ 選擇要執行的模式（可複選，全勾則四種都跑）**")
+mc1, mc2, mc3, mc4 = st.columns(4)
+with mc1:
+    use_auto = st.checkbox("auto", value=True)
+with mc2:
+    use_requests = st.checkbox("requests", value=True)
+with mc3:
+    use_cloud = st.checkbox("cloudscraper", value=True)
+with mc4:
+    use_playwright = st.checkbox("playwright", value=True)
 
 col3, col4 = st.columns([3, 2])
 with col3:
-    page_input = st.slider(
-        "📄 爬取頁數",
-        min_value=1, max_value=20, value=1, step=1,
-    )
+    page_input = st.slider("📄 爬取頁數", 1, 20, 1, 1)
 with col4:
-    keyword_input = st.text_input(
-        "🔍 關鍵字過濾（選填）",
-        placeholder="例：勞動契約",
-    )
+    keyword_input = st.text_input("🔍 關鍵字過濾（選填）", placeholder="例：勞動契約")
 
 scrape_btn = st.button("🚀 開始爬取", type="primary", use_container_width=True)
 
@@ -596,72 +559,130 @@ if scrape_btn:
     if not url_input.strip():
         st.error("⚠️ 請輸入網址")
     else:
-        with st.spinner("🕸️ 正在爬取資料中，請稍候..."):
-            result = scraper.scrape(
-                url=url_input.strip(),
-                pages=int(page_input),
-                keyword=keyword_input.strip(),
-                mode=mode_input,
-            )
+        # 收集要跑的模式
+        selected_modes = []
+        if use_auto:        selected_modes.append("auto")
+        if use_requests:    selected_modes.append("requests")
+        if use_cloud:       selected_modes.append("cloudscraper")
+        if use_playwright:  selected_modes.append("playwright")
 
-        logs_list = result.get("logs", [])
-        logs_str  = "\n".join(logs_list)
-        used_mode = detect_used_mode(logs_list)
-        error_msg = result.get("error", "")
-
-        # ── 摘要 ──
-        st.subheader("📊 爬取摘要")
-
-        if not error_msg:
-            st.success("✅ 爬取完成")
+        if not selected_modes:
+            st.error("⚠️ 請至少勾選一個模式")
         else:
-            st.error(f"❌ 爬取失敗：{error_msg}")
+            results = {}
+            progress = st.progress(0, text="開始執行...")
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("📊 總筆數", result.get("total_rows", 0))
-        m2.metric("📄 爬取頁數", result.get("pages_scraped", 0))
-        m3.metric("🔧 實際模式", used_mode)
-        m4.metric("🔍 關鍵字", keyword_input if keyword_input else "（無）")
-
-        with st.expander("📌 詳細資訊", expanded=False):
-            st.write(f"**網址：** {result.get('url', url_input)}")
-            st.write(f"**錯誤：** {error_msg if error_msg else '無'}")
-
-        st.divider()
-
-        # ── Tabs 輸出 ──
-        tab1, tab2, tab3 = st.tabs(["📋 表格檢視", "🗂️ JSON 原始資料", "📝 執行日誌"])
-
-        data = result.get("data", [])
-
-        with tab1:
-            if data:
-                df = pd.DataFrame(data)
-                st.dataframe(df, use_container_width=True, height=500)
-                csv = df.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "⬇️ 下載 CSV",
-                    data=csv,
-                    file_name="scrape_result.csv",
-                    mime="text/csv",
+            for i, m in enumerate(selected_modes):
+                progress.progress(
+                    (i) / len(selected_modes),
+                    text=f"🕸️ 正在執行 {m} 模式 ({i+1}/{len(selected_modes)})..."
                 )
-            else:
-                st.info("（無資料）")
+                try:
+                    r = scraper.scrape(
+                        url=url_input.strip(),
+                        pages=int(page_input),
+                        keyword=keyword_input.strip(),
+                        mode=m,
+                    )
+                except Exception as e:
+                    r = {
+                        "url": url_input, "mode": m, "pages_scraped": 0,
+                        "total_rows": 0, "data": [],
+                        "logs": [f"❌ 執行時錯誤：{e}"], "error": str(e),
+                    }
+                results[m] = r
 
-        with tab2:
-            raw = json.dumps(result, ensure_ascii=False, indent=2)
-            st.code(raw, language="json")
+            progress.progress(1.0, text="✅ 全部完成")
+            time.sleep(0.3)
+            progress.empty()
+
+            # ── 比較摘要表 ──────────────────
+            st.subheader("📊 模式比較總覽")
+
+            compare_rows = []
+            for m, r in results.items():
+                compare_rows.append({
+                    "模式":       m,
+                    "狀態":       "✅ 成功" if not r.get("error") else "❌ 失敗",
+                    "總筆數":     r.get("total_rows", 0),
+                    "爬取頁數":   r.get("pages_scraped", 0),
+                    "實際使用":   detect_used_mode(r.get("logs", [])),
+                    "錯誤訊息":   r.get("error", "") or "—",
+                })
+            st.dataframe(pd.DataFrame(compare_rows),
+                         use_container_width=True, hide_index=True)
+
+            st.divider()
+
+            # ── 各模式結果 Tabs ──────────────
+            st.subheader("📁 各模式詳細結果")
+            mode_tabs = st.tabs([f"🔧 {m}" for m in selected_modes])
+
+            for tab, m in zip(mode_tabs, selected_modes):
+                with tab:
+                    r = results[m]
+                    err = r.get("error", "")
+
+                    if not err:
+                        st.success(f"✅ {m} 爬取完成")
+                    else:
+                        st.error(f"❌ {m} 爬取失敗：{err}")
+
+                    a, b, c, d = st.columns(4)
+                    a.metric("📊 總筆數", r.get("total_rows", 0))
+                    b.metric("📄 爬取頁數", r.get("pages_scraped", 0))
+                    c.metric("🔧 實際使用", detect_used_mode(r.get("logs", [])))
+                    d.metric("🔍 關鍵字", keyword_input or "（無）")
+
+                    sub1, sub2, sub3 = st.tabs(
+                        ["📋 表格檢視", "🗂️ JSON", "📝 日誌"]
+                    )
+                    data = r.get("data", [])
+
+                    with sub1:
+                        if data:
+                            df = pd.DataFrame(data)
+                            st.dataframe(df, use_container_width=True, height=450)
+                            csv = df.to_csv(index=False).encode("utf-8-sig")
+                            st.download_button(
+                                f"⬇️ 下載 CSV ({m})",
+                                data=csv,
+                                file_name=f"scrape_{m}.csv",
+                                mime="text/csv",
+                                key=f"csv_{m}",
+                            )
+                        else:
+                            st.info("（無資料）")
+
+                    with sub2:
+                        raw = json.dumps(r, ensure_ascii=False, indent=2)
+                        st.code(raw, language="json")
+                        st.download_button(
+                            f"⬇️ 下載 JSON ({m})",
+                            data=raw.encode("utf-8"),
+                            file_name=f"scrape_{m}.json",
+                            mime="application/json",
+                            key=f"json_{m}",
+                        )
+
+                    with sub3:
+                        logs_str = "\n".join(r.get("logs", []))
+                        if logs_str:
+                            st.code(logs_str, language="text")
+                        else:
+                            st.info("（無日誌）")
+
+            # ── 合併下載 ─────────────────────
+            st.divider()
+            st.subheader("📦 一次下載全部結果")
+            merged = {m: results[m] for m in selected_modes}
+            merged_json = json.dumps(merged, ensure_ascii=False, indent=2)
             st.download_button(
-                "⬇️ 下載 JSON",
-                data=raw.encode("utf-8"),
-                file_name="scrape_result.json",
+                "⬇️ 下載全部模式結果（JSON）",
+                data=merged_json.encode("utf-8"),
+                file_name="scrape_all_modes.json",
                 mime="application/json",
+                use_container_width=True,
             )
-
-        with tab3:
-            if logs_str:
-                st.code(logs_str, language="text")
-            else:
-                st.info("（無日誌）")
 else:
-    st.info("👆 請輸入網址並點擊「開始爬取」")
+    st.info("👆 請輸入網址、勾選想跑的模式，然後點擊「開始爬取」")
