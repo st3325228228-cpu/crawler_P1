@@ -1,0 +1,8 @@
+streamlit
+pandas
+requests
+cloudscraper
+beautifulsoup4
+lxml
+playwright
+urllib3
