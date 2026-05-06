@@ -16,6 +16,12 @@ import streamlit as st
 from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse, urljoin
+import subprocess
+import sys
+
+# 確保 Playwright 瀏覽器已安裝
+subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+
 
 urllib3.disable_warnings()
 
