@@ -6,6 +6,8 @@ beautifulsoup4
 lxml
 playwright
 urllib3
+
+# 以下為 Playwright 在 Ubuntu 環境所需的系統依賴（Streamlit Cloud 必須）
 libnss3
 libnspr4
 libatk1.0-0
